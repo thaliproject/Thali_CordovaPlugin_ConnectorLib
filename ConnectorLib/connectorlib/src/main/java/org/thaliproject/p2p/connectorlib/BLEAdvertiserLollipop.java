@@ -21,217 +21,149 @@ import android.util.Log;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Created by juksilve on 20.4.2015.
  */
 public class BLEAdvertiserLollipop {
 
-    BLEAdvertiserLollipop that = this;
+    private final BLEAdvertiserLollipop that = this;
+    private final Context context;
+    private final AdvertiserCallback callback;
+    private final Handler mHandler;
+    private final CopyOnWriteArrayList<BluetoothGattService> mBluetoothGattServices = new CopyOnWriteArrayList<BluetoothGattService>();
+    private final CopyOnWriteArrayList<ParcelUuid> serviceUuids = new CopyOnWriteArrayList<ParcelUuid>();
+    private final BluetoothManager mBluetoothManager;
+    private final BluetoothAdapter mBluetoothAdapter;
 
-    interface BLEAdvertiserCallback{
-        public void onAdvertisingStarted(AdvertiseSettings settingsInEffec, String error);
-        public void onAdvertisingStopped(String error);
-    }
-
-    public class WriteStorage{
-        private String  mDeviceAddress;
-        private String mUUID;
-        private boolean mIsCharacter;
-        List<byte[]> byteArray;
-        public WriteStorage(String address,String uuid, boolean isCharacter){
-            mDeviceAddress = address;
-            mUUID = uuid;
-            byteArray = new ArrayList<byte[]>();
-            mIsCharacter = isCharacter;
-        }
-
-        public boolean isCharacter(){return mIsCharacter;}
-        public String getUUID(){return mUUID;}
-        public String getDeviceAddress(){return mDeviceAddress;}
-        public void clearData(){
-            byteArray.clear();
-        }
-        public void addData(byte[] array){
-            byteArray.add(array);
-        }
-
-        public byte[] getFullData(){
-            byte[] retArray = null;
-            int totalSize = 0;
-
-            for(int i=0; i < byteArray.size();i++){
-                totalSize = totalSize + byteArray.get(i).length;
-            }
-
-            int copuCounter = 0;
-            if(totalSize > 0) {
-                retArray = new byte[totalSize];
-                for(int ii=0; ii < byteArray.size();ii++){
-                    byte[] tmpArr = byteArray.get(ii);
-                    System.arraycopy(tmpArr, 0, retArray,copuCounter,tmpArr.length);
-                    copuCounter = copuCounter + tmpArr.length;
-                }
-            }else{
-                retArray = new byte[]{};
-            }
-            return retArray;
-        }
-    }
-
-    private List<WriteStorage> mWriteList = new ArrayList<WriteStorage>();
-
-    private Context context = null;
-    BLEAdvertiserCallback callback = null;
-    private Handler mHandler = null;
-
-    private BluetoothManager mBluetoothManager;
-    private BluetoothAdapter mBluetoothAdapter;
     private BluetoothGattServer mBluetoothGattServer;
     private BluetoothLeAdvertiser mBluetoothLeAdvertiser;
-    private ArrayList<BluetoothGattService> mBluetoothGattServices;
-    private List<ParcelUuid> serviceUuids;
 
-    public BLEAdvertiserLollipop(Context Context, BLEAdvertiserCallback CallBack) {
+    private boolean weAreStoppingNow = false;
+
+    public BLEAdvertiserLollipop(Context Context, AdvertiserCallback CallBack,BluetoothManager btManager) {
         this.context = Context;
         this.callback = CallBack;
         this.mHandler = new Handler(this.context.getMainLooper());
-
-        mBluetoothGattServices = new ArrayList<BluetoothGattService>();
-        serviceUuids = new ArrayList<ParcelUuid>();
+        this.mBluetoothManager = btManager;
+        this.mBluetoothAdapter = mBluetoothManager.getAdapter();
     }
-    public synchronized void Start() {
+    public boolean Start() {
 
-        if (BLEBase.isBLESupported(this.context)) {
-            mBluetoothManager = (BluetoothManager) this.context.getSystemService(Context.BLUETOOTH_SERVICE);
-            if (mBluetoothManager != null) {
-                mBluetoothAdapter = mBluetoothManager.getAdapter();
-                if (mBluetoothAdapter != null && mBluetoothAdapter.isMultipleAdvertisementSupported()) {
-                    mBluetoothGattServer = mBluetoothManager.openGattServer(this.context, serverCallback);
-                    mBluetoothLeAdvertiser = mBluetoothAdapter.getBluetoothLeAdvertiser();
-
-                    synchronized (mBluetoothGattServices) {
-                        for (int i = 0; i < mBluetoothGattServices.size(); i++) {
-                            mBluetoothGattServer.addService(mBluetoothGattServices.get(i));
-                        }
-                    }
-
-                    AdvertiseData.Builder dataBuilder = new AdvertiseData.Builder();
-                    AdvertiseSettings.Builder settingsBuilder = new AdvertiseSettings.Builder();
-
-                    dataBuilder.setIncludeTxPowerLevel(true);
-
-                    for (int ii = 0; ii < serviceUuids.size(); ii++) {
-                        dataBuilder.addServiceUuid(serviceUuids.get(ii));
-                    }
-
-                    settingsBuilder.setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED);
-                    settingsBuilder.setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH);
-                    settingsBuilder.setConnectable(true);
-
-                    stopped = false;
-                    mBluetoothLeAdvertiser.startAdvertising(settingsBuilder.build(), dataBuilder.build(),mAdvertiseCallback );
-                } else {
-                    Started(null, "MultipleAdvertisementSupported is NOT-Supported");
-                }
-            } else {
-                Started(null, "Bluetooth is NOT-Supported");
-            }
-        } else {
-            Started(null, "BLE is NOT-Supported");
+        if(mBluetoothManager == null || mBluetoothAdapter == null){
+            Started("Bluetooth is NOT-Supported");
+            return false;
         }
+
+        if (!BLEBase.isBLESupported(this.context)) {
+            Started("BLE is NOT-Supported");
+            return false;
+        }
+
+        if(!mBluetoothAdapter.isMultipleAdvertisementSupported()) {
+            Started("MultipleAdvertisementSupported is NOT-Supported");
+            return false;
+        }
+
+        mBluetoothGattServer = mBluetoothManager.openGattServer(this.context, mGattServerCallback);
+        mBluetoothLeAdvertiser = mBluetoothAdapter.getBluetoothLeAdvertiser();
+
+        for (BluetoothGattService service: mBluetoothGattServices) {
+            if (service != null) {
+                mBluetoothGattServer.addService(service);
+            }
+        }
+
+        AdvertiseData.Builder dataBuilder = new AdvertiseData.Builder();
+        AdvertiseSettings.Builder settingsBuilder = new AdvertiseSettings.Builder();
+
+        dataBuilder.setIncludeTxPowerLevel(true);
+
+        for (ParcelUuid uuid : serviceUuids) {
+            dataBuilder.addServiceUuid(uuid);
+        }
+
+        settingsBuilder.setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED);
+        settingsBuilder.setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH);
+        settingsBuilder.setConnectable(true);
+
+        weAreStoppingNow = false;
+        mBluetoothLeAdvertiser.startAdvertising(settingsBuilder.build(), dataBuilder.build(),mAdvertiseCallback );
+        return true;
     }
 
-    public synchronized void Stop() {
-        BluetoothLeAdvertiser tmpAdver = mBluetoothLeAdvertiser;
+    public void Stop() {
+        BluetoothLeAdvertiser tmpLeAdvertiser = mBluetoothLeAdvertiser;
         mBluetoothLeAdvertiser = null;
-        if(tmpAdver != null) {
-            debug_print("ADV-CB", "Call Stop advert");
-            stopped = true;
-            tmpAdver.stopAdvertising(mAdvertiseCallback);
+        if(tmpLeAdvertiser != null) {
+            Log.i("ADV-CB", "Call Stop advert");
+            weAreStoppingNow = true;
+            tmpLeAdvertiser.stopAdvertising(mAdvertiseCallback);
         }
 
-        synchronized (mBluetoothGattServices) {
-            if (mBluetoothGattServices != null) {
-                if (mBluetoothGattServer != null) {
-                    for (BluetoothGattService serv : mBluetoothGattServices) {
-                        mBluetoothGattServer.removeService(serv);
-                    }
-                }
-                mBluetoothGattServices.clear();
-            }
-        }
-
-        BluetoothGattServer tmpServ = mBluetoothGattServer;
+        BluetoothGattServer tmpGatServer = mBluetoothGattServer;
         mBluetoothGattServer = null;
-        if(tmpServ != null){
-            tmpServ.clearServices();
-            tmpServ.close();
-        }
+        if (tmpGatServer != null) {
+            for (BluetoothGattService service : mBluetoothGattServices) {
+                tmpGatServer.removeService(service);
+            }
 
-        if(serviceUuids != null){
-            serviceUuids.clear();
+            tmpGatServer.clearServices();
+            tmpGatServer.close();
         }
-
-        mWriteList.clear();
+        mBluetoothGattServices.clear();
+        serviceUuids.clear();
     }
 
     public boolean addService(BluetoothGattService service) {
         boolean ret = false;
-        synchronized (mBluetoothGattServices) {
-            if (mBluetoothGattServices != null && serviceUuids != null && service != null && service.getUuid() != null) {
-                mBluetoothGattServices.add(service);
-                serviceUuids.add(new ParcelUuid(service.getUuid()));
-                ret = true;
-            }
+        if (service != null && service.getUuid() != null) {
+            mBluetoothGattServices.add(service);
+            serviceUuids.add(new ParcelUuid(service.getUuid()));
+            ret = true;
         }
 
         return ret;
     }
     public boolean setCharacterValue(UUID uuid, byte[] value) {
         boolean ret = false;
-        if (mBluetoothGattServices != null) {
-            synchronized (mBluetoothGattServices) {
-                for (BluetoothGattService tmpServ : mBluetoothGattServices) {
-                    outerloop:
-                    if (tmpServ != null) {
-                        List<BluetoothGattCharacteristic> CharList = tmpServ.getCharacteristics();
-                        if (CharList != null) {
-                            for (BluetoothGattCharacteristic chara : CharList) {
-                                if (chara != null && chara.getUuid().compareTo(uuid) == 0) {
-                                    chara.setValue(value);
-                                    ret = true;
-                                    break outerloop;
-                                }
-                            }
+
+        for (BluetoothGattService tmpService : mBluetoothGattServices) {
+            outerLoop:
+            if (tmpService != null) {
+                List<BluetoothGattCharacteristic> CharList = tmpService.getCharacteristics();
+                if (CharList != null) {
+                    for (BluetoothGattCharacteristic chara : CharList) {
+                        if (chara != null && chara.getUuid().compareTo(uuid) == 0) {
+                            chara.setValue(value);
+                            ret = true;
+                            break outerLoop;
                         }
                     }
                 }
             }
         }
+
         return ret;
     }
 
     public boolean setDescriptorValue(UUID uuid, byte[] value) {
         boolean ret = false;
-        if (mBluetoothGattServices != null) {
-            synchronized (mBluetoothGattServices) {
-                for (BluetoothGattService tmpServ : mBluetoothGattServices) {
-                    outerloop:
-                    if (tmpServ != null) {
-                        List<BluetoothGattCharacteristic> CharList = tmpServ.getCharacteristics();
-                        if (CharList != null) {
-                            for (BluetoothGattCharacteristic chara : CharList) {
-                                if (chara != null) {
-                                    List<BluetoothGattDescriptor> DescList = chara.getDescriptors();
-                                    if (DescList != null) {
-                                        for (BluetoothGattDescriptor descr : DescList) {
-                                            if (descr != null && descr.getUuid().compareTo(uuid) == 0) {
-                                                descr.setValue(value);
-                                                ret = true;
-                                                break outerloop;
-                                            }
-                                        }
+        for (BluetoothGattService tmpService : mBluetoothGattServices) {
+            outerLoop:
+            if (tmpService != null) {
+                List<BluetoothGattCharacteristic> CharList = tmpService.getCharacteristics();
+                if (CharList != null) {
+                    for (BluetoothGattCharacteristic chara : CharList) {
+                        if (chara != null) {
+                            List<BluetoothGattDescriptor> DescList = chara.getDescriptors();
+                            if (DescList != null) {
+                                for (BluetoothGattDescriptor descr : DescList) {
+                                    if (descr != null && descr.getUuid().compareTo(uuid) == 0) {
+                                        descr.setValue(value);
+                                        ret = true;
+                                        break outerLoop;
                                     }
                                 }
                             }
@@ -240,18 +172,18 @@ public class BLEAdvertiserLollipop {
                 }
             }
         }
+
         return ret;
     }
 
-    private void Started(AdvertiseSettings settingsInEffec,String error){
-        final AdvertiseSettings settingsInEffecTmp = settingsInEffec;
+    private void Started(String error){
         final String errorTmp = error;
 
         that.mHandler.post(new Runnable() {
             @Override
             public void run() {
                 if(callback != null) {
-                    callback.onAdvertisingStarted(settingsInEffecTmp, errorTmp);
+                    callback.onAdvertisingStarted(errorTmp);
                 }
             }
         });
@@ -269,36 +201,34 @@ public class BLEAdvertiserLollipop {
         });
     }
 
-    BluetoothGattServerCallback serverCallback = new BluetoothGattServerCallback() {
-
+    private final BluetoothGattServerCallback mGattServerCallback  = new BluetoothGattServerCallback() {
 
         @Override
         public void onCharacteristicReadRequest(android.bluetooth.BluetoothDevice device, int requestId, int offset, BluetoothGattCharacteristic characteristic) {
             super.onCharacteristicReadRequest(device, requestId, offset, characteristic);
 
-            byte[] dataForResponse = new byte[] {};
-            if (mBluetoothGattServices != null) {
-                synchronized (mBluetoothGattServices) {
-                    for (BluetoothGattService tmpServ : mBluetoothGattServices) {
-                        outerloop:
-                        if (tmpServ != null) {
-                            List<BluetoothGattCharacteristic> CharList = tmpServ.getCharacteristics();
-                            if (CharList != null) {
-                                for (BluetoothGattCharacteristic chara : CharList) {
-                                    if (chara != null && chara.getUuid().compareTo(characteristic.getUuid()) == 0) {
-                                        String tmpString = chara.getStringValue(offset);
-                                        if (tmpString != null && tmpString.length() > 0) {
-                                            dataForResponse = tmpString.getBytes();
-                                        }
-                                        break outerloop;
-                                    }
+            byte[] dataForResponse = new byte[]{};
+
+            for (BluetoothGattService tmpService : mBluetoothGattServices) {
+                outerLoop:
+                if (tmpService != null) {
+                    List<BluetoothGattCharacteristic> CharList = tmpService.getCharacteristics();
+                    if (CharList != null) {
+                        for (BluetoothGattCharacteristic chara : CharList) {
+                            if (chara != null && chara.getUuid().compareTo(characteristic.getUuid()) == 0) {
+                                // use offset to continue where the last read request ended
+                                String tmpString = chara.getStringValue(offset);
+                                if (tmpString != null && tmpString.length() > 0) {
+                                    dataForResponse = tmpString.getBytes();
                                 }
+                                break outerLoop;
                             }
                         }
                     }
                 }
             }
-            if (mBluetoothGattServer != null){
+
+            if (mBluetoothGattServer != null) {
                 mBluetoothGattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, dataForResponse);
             }
         }
@@ -308,35 +238,32 @@ public class BLEAdvertiserLollipop {
         public void onDescriptorReadRequest(android.bluetooth.BluetoothDevice device, int requestId, int offset, BluetoothGattDescriptor descriptor) {
             super.onDescriptorReadRequest(device, requestId, offset, descriptor);
 
-            byte[] dataForResponse = new byte[] {};
+            byte[] dataForResponse = new byte[]{};
 
-            if (mBluetoothGattServices != null) {
-                synchronized (mBluetoothGattServices) {
-                    for (BluetoothGattService tmpServ : mBluetoothGattServices) {
-                        outerloop:
-                        if (tmpServ != null) {
-                            List<BluetoothGattCharacteristic> CharList = tmpServ.getCharacteristics();
-                            if (CharList != null) {
-                                for (BluetoothGattCharacteristic chara : CharList) {
-                                    if (chara != null) {
-                                        List<BluetoothGattDescriptor> DescList = chara.getDescriptors();
-                                        if (DescList != null) {
-                                            for (BluetoothGattDescriptor descr : DescList) {
-                                                if (descr != null && descr.getUuid().compareTo(descriptor.getUuid()) == 0) {
 
-                                                    byte[] tmpString = descr.getValue();
+            for (BluetoothGattService tmpService : mBluetoothGattServices) {
+                outerLoop:
+                if (tmpService != null) {
+                    List<BluetoothGattCharacteristic> CharList = tmpService.getCharacteristics();
+                    if (CharList != null) {
+                        for (BluetoothGattCharacteristic chara : CharList) {
+                            if (chara != null) {
+                                List<BluetoothGattDescriptor> DescList = chara.getDescriptors();
+                                if (DescList != null) {
+                                    for (BluetoothGattDescriptor descriptorItem : DescList) {
+                                        if (descriptorItem != null && descriptorItem.getUuid().compareTo(descriptor.getUuid()) == 0) {
 
-                                                    if (tmpString == null || offset > tmpString.length) {
-                                                        //lets just return the empty string we have made already
-                                                    } else {
-                                                        dataForResponse = new byte[tmpString.length - offset];
-                                                        for (int i = 0; i != (tmpString.length - offset); ++i) {
-                                                            dataForResponse[i] = tmpString[offset + i];
-                                                        }
-                                                    }
-                                                    break outerloop;
+                                            byte[] tmpString = descriptorItem.getValue();
+
+                                            if (tmpString == null || offset > tmpString.length) {
+                                                //lets just return the empty string we have made already
+                                            } else {
+                                                dataForResponse = new byte[tmpString.length - offset];
+                                                for (int i = 0; i != (tmpString.length - offset); ++i) {
+                                                    dataForResponse[i] = tmpString[offset + i];
                                                 }
                                             }
+                                            break outerLoop;
                                         }
                                     }
                                 }
@@ -345,56 +272,58 @@ public class BLEAdvertiserLollipop {
                     }
                 }
             }
-            if (mBluetoothGattServer != null){
+
+            if (mBluetoothGattServer != null) {
                 mBluetoothGattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, dataForResponse);
             }
         }
     };
 
-
-
-    boolean stopped = false;
-    AdvertiseCallback mAdvertiseCallback = new AdvertiseCallback() {
+    private final AdvertiseCallback mAdvertiseCallback = new AdvertiseCallback() {
 
         @Override
         public void onStartSuccess(AdvertiseSettings settingsInEffec) {
-            if(stopped) {
-                debug_print("ADV-CB", "Stopped OK");
+            if(weAreStoppingNow) {
+                Log.i("ADV-CB", "Stopped OK");
                 Stopped(null);
             }else{
-                debug_print("ADV-CB", "Started OK");
-                Started(settingsInEffec, null);
+                Log.i("ADV-CB", "Started OK");
+                Started( null);
             }
         }
 
         @Override
         public void onStartFailure(int result) {
             String errBuffer = "";
-            if (result == AdvertiseCallback.ADVERTISE_FAILED_DATA_TOO_LARGE) {
-                errBuffer = "Failed to start advertising as the advertise data to be broadcasted is larger than 31 bytes.";
-            } else if (result == AdvertiseCallback.ADVERTISE_FAILED_TOO_MANY_ADVERTISERS) {
-                errBuffer = "Failed to start advertising because no advertising instance is available.";
-            } else if (result == AdvertiseCallback.ADVERTISE_FAILED_ALREADY_STARTED) {
-                errBuffer = "Failed to start advertising as the advertising is already started.";
-            } else if (result == AdvertiseCallback.ADVERTISE_FAILED_INTERNAL_ERROR) {
-                errBuffer = "Operation failed due to an internal error.";
-            } else if (result == AdvertiseCallback.ADVERTISE_FAILED_FEATURE_UNSUPPORTED) {
-                errBuffer = "This feature is not supported on this platform.";
-            } else {
-                errBuffer = "There was unknown error(" + String.format("%02X", result) + ")";
+
+            switch(result){
+                case AdvertiseCallback.ADVERTISE_FAILED_DATA_TOO_LARGE:
+                    errBuffer = "Failed to start advertising as the advertise data to be broadcasted is larger than 31 bytes.";
+                    break;
+                case ADVERTISE_FAILED_TOO_MANY_ADVERTISERS:
+                    errBuffer = "Failed to start advertising because no advertising instance is available.";
+                    break;
+                case AdvertiseCallback.ADVERTISE_FAILED_ALREADY_STARTED:
+                    errBuffer = "Failed to start advertising as the advertising is already started.";
+                    break;
+                case AdvertiseCallback.ADVERTISE_FAILED_INTERNAL_ERROR:
+                    errBuffer = "Operation failed due to an internal error.";
+                    break;
+                case AdvertiseCallback.ADVERTISE_FAILED_FEATURE_UNSUPPORTED:
+                    errBuffer = "This feature is not supported on this platform.";
+                    break;
+                default:
+                    errBuffer = "There was unknown error(" + String.format("%02X", result) + ")";
+                    break;
             }
 
-            if(stopped) {
-                debug_print("ADV-CB", "Stopped OK");
+            if(weAreStoppingNow) {
+                Log.i("ADV-CB", "Stopped OK");
                 Stopped(errBuffer);
             }else{
-                debug_print("ADV-CB", "Started OK");
-                Started(null,errBuffer);
+                Log.i("ADV-CB", "Started OK");
+                Started(errBuffer);
             }
         }
     };
-
-    private void debug_print(String who, String what){
-        Log.i(who, what);
-    }
 }

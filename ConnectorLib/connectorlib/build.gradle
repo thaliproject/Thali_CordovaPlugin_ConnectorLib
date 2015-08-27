@@ -5,7 +5,7 @@ version = gradle.ext.version
 group = gradle.ext.group
 
 android {
-    compileSdkVersion 22
+    compileSdkVersion 21
     buildToolsVersion "21.1.2"
 
     defaultConfig {

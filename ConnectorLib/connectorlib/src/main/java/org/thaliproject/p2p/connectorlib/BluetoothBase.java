@@ -12,71 +12,69 @@ import android.util.Log;
 /**
  * Created by juksilve on 6.3.2015.
  */
-public class BluetoothBase {
+class BluetoothBase {
 
-    public interface  BluetoothStatusChanged{
-        public void BluetoothStateChanged(int state);
-    }
+    private final APIStatusChangedCallback callBack;
+    private final BluetoothAdapter bluetooth;
 
-    private BluetoothStatusChanged callBack = null;
-    private BluetoothAdapter bluetooth = null;
+    private BtBroadCastReceiver receiver = null;
+    private final Context context;
 
-    private BtBrowdCastReceiver receiver = null;
-    private IntentFilter filter = null;
-    private Context context = null;
-    String blueAddress = "";
-
-    public BluetoothBase(Context Context, BluetoothStatusChanged handler) {
+    public BluetoothBase(Context Context, APIStatusChangedCallback handler) {
         this.context = Context;
         this.callBack = handler;
-
-        //bluetooth = new BluetoothAdapter(this);
-        bluetooth = BluetoothAdapter.getDefaultAdapter();
-        if(bluetooth != null) {
-            blueAddress = bluetooth.getAddress();
-        }
+        this.bluetooth = BluetoothAdapter.getDefaultAdapter();
     }
 
-    public boolean Start() {
-
-        boolean ret = false;
-        if(bluetooth != null) {
-            ret = true;
-            Log.d("", "Start-My BT: " + blueAddress);
-
-            if(receiver == null) {
-                filter = new IntentFilter();
-                filter.addAction(BluetoothAdapter.ACTION_SCAN_MODE_CHANGED);
-                receiver = new BtBrowdCastReceiver();
-                this.context.registerReceiver(receiver, filter);
-            }
+    //returning false will indicate missing HW support
+    public boolean Start(){
+        if (bluetooth == null) {
+            return false;
         }
-        return ret;
+
+        Stop();
+
+        Log.i("", "Start-My BT: " + getAddress());
+
+        BtBroadCastReceiver tmpReceiver = new BtBroadCastReceiver();
+        try {
+
+            IntentFilter filter = new IntentFilter();
+            filter.addAction(BluetoothAdapter.ACTION_SCAN_MODE_CHANGED);
+            this.context.registerReceiver(tmpReceiver, filter);
+        } catch (IllegalArgumentException e) {
+            e.printStackTrace();
+            return false;
+        }
+        receiver = tmpReceiver;
+        return true;
     }
 
     public void Stop() {
-        if(receiver != null) {
-            this.context.unregisterReceiver(receiver);
-            receiver = null;
+
+        BroadcastReceiver tmp = receiver;
+        receiver = null;
+        if (tmp != null) {
+            try {
+                this.context.unregisterReceiver(tmp);
+            } catch(IllegalArgumentException e) {e.printStackTrace();}
         }
     }
 
     public void SetBluetoothEnabled(boolean seton) {
-        if (bluetooth != null) {
-            if (seton) {
-                bluetooth.enable();
-            } else {
-                bluetooth.disable();
-            }
+        if (bluetooth == null) {
+            return;
+        }
+
+        if (seton) {
+            bluetooth.enable();
+        } else {
+            bluetooth.disable();
         }
     }
 
     public boolean isBluetoothEnabled() {
-        if (bluetooth != null) {
-            return bluetooth.isEnabled();
-        } else {
-            return false;
-        }
+        return bluetooth != null && bluetooth.isEnabled();
     }
 
     public BluetoothAdapter getAdapter(){
@@ -84,26 +82,18 @@ public class BluetoothBase {
     }
 
     public String getAddress() {
-        return blueAddress;
+        return bluetooth == null ? null : bluetooth.getAddress();
     }
 
     public String getName() {
-        String ret = "";
-        if (bluetooth != null){
-            ret = bluetooth.getName();
-        }
-        return ret;
+        return bluetooth == null ? null : bluetooth.getName();
     }
 
     public BluetoothDevice getRemoteDevice(String address) {
-        BluetoothDevice device = null;
-        if (bluetooth != null){
-            device = bluetooth.getRemoteDevice(address);
-        }
-        return device;
+        return bluetooth == null ? null : bluetooth.getRemoteDevice(address);
     }
 
-    private class BtBrowdCastReceiver extends BroadcastReceiver {
+    private class BtBroadCastReceiver extends BroadcastReceiver {
         @Override
         public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();

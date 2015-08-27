@@ -17,12 +17,10 @@ import java.util.Map;
  */
 public class BLEBase {
 
-    static public String SERVICE_UUID_1      = "010500a1-00b0-1000-8000-00805f9b34fb";
-    static public String CharacteristicsUID1 = "46651222-96e0-4aca-a710-8f35f7e702b9";
-
-    interface CallBack{
-        public void debug(String who, String text);
-    }
+    //this is out globally unique Service UUID, which is used for determining that the BLE device is running our service
+    // the actual values are delivered through the characteristics
+    static public final String SERVICE_UUID_1      = "010500a1-00b0-1000-8000-00805f9b34fb";
+    static public final String CharacteristicsUID1 = "46651222-96e0-4aca-a710-8f35f7e702b9";
 
     public static boolean isBLESupported(Context context) {
         return context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE);
@@ -42,7 +40,7 @@ public class BLEBase {
         return ret;
     }
 
-    public static String getConnectionState(int State) {
+    public static String getConnectionStateAsString(int State) {
         switch (State) {
             case BluetoothProfile.STATE_DISCONNECTED:
                 return "DisConnected";
@@ -53,12 +51,12 @@ public class BLEBase {
             case BluetoothProfile.STATE_DISCONNECTING:
                 return "Disconnecting";
             default:
-                return "Uknown";
+                return "Uknown(" + String.format("%02X", State )+ ").";
 
         }
     }
 
-    public static String getGATTStatus(int State) {
+    public static String getGATTStatusAsString(int State) {
         switch (State) {
             case BluetoothGatt.GATT_SUCCESS:
                 return "SUCCESS";
@@ -85,22 +83,19 @@ public class BLEBase {
         }
     }
 
-    public static String getDeviceNameOrAddress(String deviceAddress,Context context) {
-        String ret = "";
+    public static String getDeviceNameOrAddressAsString(String deviceAddress,Context context) {
 
         BluetoothManager tmpBluetoothManager = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
-        if (tmpBluetoothManager != null) {
-            BluetoothDevice tmpDev = tmpBluetoothManager.getAdapter().getRemoteDevice(deviceAddress);
-            if (tmpDev != null && tmpDev.getName() != null) {
-                ret = tmpDev.getName();
-            }
+        if (tmpBluetoothManager == null) {
+            return null;
         }
 
-        if (ret.length() == 0) {
-            ret = deviceAddress;
+        BluetoothDevice tmpDev = tmpBluetoothManager.getAdapter().getRemoteDevice(deviceAddress);
+        if (tmpDev != null && tmpDev.getName() != null) {
+            return tmpDev.getName();
         }
 
-        return ret;
+        return deviceAddress;
     }
 
     /*

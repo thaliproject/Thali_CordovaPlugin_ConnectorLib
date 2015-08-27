@@ -3,6 +3,7 @@ package org.thaliproject.p2p.connectorlib;
 
 import android.bluetooth.BluetoothGattCharacteristic;
 import android.bluetooth.BluetoothGattService;
+import android.bluetooth.BluetoothManager;
 import android.bluetooth.le.AdvertiseSettings;
 import android.content.Context;
 import android.os.CountDownTimer;
@@ -14,135 +15,117 @@ import java.util.UUID;
 /**
  * Created by juksilve on 22.06.2015.
  */
-public class Connector_Discovery implements BLEAdvertiserLollipop.BLEAdvertiserCallback, BLEScannerKitKat.BLEScannerCallback {
+public class Connector_Discovery implements AdvertiserCallback, DiscoveryCallback {
 
-    Connector_Discovery that = this;
+    private final Connector_Discovery that = this;
+    private BLEScannerKitKat mSearchKitKat = null;
+    private BLEAdvertiserLollipop mBLEAdvertiserLollipop = null;
 
-    static String JSON_ID_PEERID   = "pi";
-    static String JSON_ID_PEERNAME = "pn";
-    static String JSON_ID_BTADRRES = "ra";
+    private final Context context;
+    private final String mSERVICE_TYPE;
 
-    public interface  DiscoveryCallback{
-        public void CurrentPeersList(List<ServiceItem> available);
-        public void PeerDiscovered(ServiceItem service);
-        public void DiscoveryStateChanged(State newState);
-    }
-    private DiscoveryCallback mDiscoveryCallback = null;
+    private final ConnectorLib_Callback callback;
+    private final BluetoothManager mBluetoothManager;
+    private final BluetoothGattService mFirstService;
 
-
-    BLEScannerKitKat mSearchKitKat = null;
-
-    BLEAdvertiserLollipop mBLEAdvertiserLollipop = null;
-    BluetoothGattService mFirstService = null;
-
-    public enum State{
-        DiscoveryIdle,
-        DiscoveryNotInitialized,
-        DiscoveryFindingPeers,
-        DiscoveryFindingServices
-    }
-
-    private State myState = State.DiscoveryNotInitialized;
-    private String mEncryptedInstance = "";
-
-    private Context context = null;
-    String mSERVICE_TYPE = "";
-
-
-    CountDownTimer ServiceFoundTimeOutTimer = new CountDownTimer(600000, 1000) {
-        public void onTick(long millisUntilFinished) {
-            // not using
-        }
-        public void onFinish() {
-            if(that.mDiscoveryCallback != null) {
-                //to clear any peers available status
-                that.mDiscoveryCallback.CurrentPeersList(null);
-            }
-            Start();
-        }
-    };
-
-    public Connector_Discovery(Context Context, DiscoveryCallback selector, String ServiceType, String instanceLine){
+    public Connector_Discovery(Context Context, ConnectorLib_Callback Callback, String ServiceType, String instanceLine){
         this.context = Context;
         this.mSERVICE_TYPE = ServiceType;
-        this.mDiscoveryCallback = selector;
-        this.mEncryptedInstance = instanceLine;
+        this.callback = Callback;
+        this.mBluetoothManager = (BluetoothManager) this.context.getSystemService(Context.BLUETOOTH_SERVICE);
+        this.mFirstService = new BluetoothGattService(UUID.fromString(BLEBase.SERVICE_UUID_1),BluetoothGattService.SERVICE_TYPE_PRIMARY);
+
+        BluetoothGattCharacteristic firstServiceChar = new BluetoothGattCharacteristic(UUID.fromString(BLEBase.CharacteristicsUID1),BluetoothGattCharacteristic.PROPERTY_READ,BluetoothGattCharacteristic.PERMISSION_READ );
+        firstServiceChar.setValue(instanceLine.getBytes());
+
+        this.mFirstService.addCharacteristic(firstServiceChar);
     }
 
      public void Start() {
-        Stop();
-
-        StartAdvertiser();
-        StartScanner();
-
-        setState(State.DiscoveryFindingPeers);
-
+         Log.i("Connector_Discovery", "starting");
+         StartAdvertiser();
+         StartScanner();
+         DiscoveryStateChanged(State.DiscoveryFindingPeers);
     }
 
-    private synchronized void StartAdvertiser(){
-        mFirstService = new BluetoothGattService(UUID.fromString(BLEBase.SERVICE_UUID_1),BluetoothGattService.SERVICE_TYPE_PRIMARY);
-
-        BluetoothGattCharacteristic firstServiceChar = new BluetoothGattCharacteristic(UUID.fromString(BLEBase.CharacteristicsUID1),BluetoothGattCharacteristic.PROPERTY_READ,BluetoothGattCharacteristic.PERMISSION_READ );
-        firstServiceChar.setValue(mEncryptedInstance.getBytes());
-
-        mFirstService.addCharacteristic(firstServiceChar);
-
-        mBLEAdvertiserLollipop = new BLEAdvertiserLollipop(that.context,that);
-        mBLEAdvertiserLollipop.addService(mFirstService);
-        mBLEAdvertiserLollipop.Start();
-    }
-
-    private synchronized void StartScanner() {
-        print_line("SCAN", "starting");
-        mSearchKitKat = new BLEScannerKitKat(this.context, this);
-        mSearchKitKat.Start();
-    }
     public void Stop() {
-        print_line("", "Stoppingservices");
-        ServiceFoundTimeOutTimer.cancel();
+        Log.i("Connector_Discovery", "Stopping");
+        StopAdvertiser();
+        StopScanner();
+        DiscoveryStateChanged(State.DiscoveryIdle);
+    }
 
-        BLEAdvertiserLollipop tmpadv= mBLEAdvertiserLollipop;
+    private void StartAdvertiser(){
+        StopAdvertiser();
+        BLEAdvertiserLollipop tmpAdvertiserLollipop = new BLEAdvertiserLollipop(that.context,that,mBluetoothManager);
+        tmpAdvertiserLollipop.addService(mFirstService);
+        tmpAdvertiserLollipop.Start();
+        mBLEAdvertiserLollipop = tmpAdvertiserLollipop;
+    }
+
+    private void StopAdvertiser(){
+        BLEAdvertiserLollipop tmpAdvertiser = mBLEAdvertiserLollipop;
         mBLEAdvertiserLollipop = null;
-        if(tmpadv != null){
-            tmpadv.Stop();
+        if(tmpAdvertiser != null){
+            tmpAdvertiser.Stop();
         }
+    }
 
-        BLEScannerKitKat tmpDisc = mSearchKitKat;
+    private void StartScanner() {
+        StopScanner();
+        BLEScannerKitKat tmpScannerKitKat = new BLEScannerKitKat(that.context, that,that.mBluetoothManager);
+        tmpScannerKitKat.Start();
+        mSearchKitKat = tmpScannerKitKat;
+    }
+
+    private void StopScanner() {
+        BLEScannerKitKat tmpScanner = mSearchKitKat;
         mSearchKitKat = null;
-        if(tmpDisc != null){
-            tmpDisc.Stop();
+        if(tmpScanner != null){
+            tmpScanner.Stop();
         }
-        setState(State.DiscoveryIdle);
     }
 
     @Override
-    public void onAdvertisingStarted(AdvertiseSettings settingsInEffec, String error) {
-        print_line("Advert", "Started err : " + error);
+    public void onAdvertisingStarted(String error) {
+        //todo should we have a way on reporting advertising prolems ?
+        Log.i("Connector_Discovery", "Started err : " + error);
     }
 
     @Override
     public void onAdvertisingStopped(String error) {
-        print_line("Advert", "Stopped err : " + error);
+        Log.i("Connector_Discovery", "Stopped err : " + error);
     }
 
-
+    //we are simply forwarding thw calls for DiscoveryCallback to be handled in the ConnectorLib
     @Override
     public void gotServicesList(List<ServiceItem> list) {
-        mDiscoveryCallback.CurrentPeersList(list);
+        callback.CurrentPeersList(list);
     }
 
     @Override
     public void foundService(ServiceItem item) {
-        mDiscoveryCallback.PeerDiscovered(item);
+        callback.PeerDiscovered(item);
     }
 
+    @Override
+    public void DiscoveryStateChanged(State newState) {
 
-    private void setState(State newState) {
-       mDiscoveryCallback.DiscoveryStateChanged(newState);
-
-    }
-
-    public void print_line(String who, String line) {
-        Log.i("BTConnector_Discovery" + who, line);
+        switch(newState){
+            case DiscoveryIdle:
+                callback.DiscoveryStateChanged(ConnectorLib_Callback.DiscoveryState.Idle);
+                break;
+            case DiscoveryNotInitialized:
+                callback.DiscoveryStateChanged(ConnectorLib_Callback.DiscoveryState.NotInitialized);
+                break;
+            case DiscoveryFindingPeers:
+                callback.DiscoveryStateChanged(ConnectorLib_Callback.DiscoveryState.FindingPeers);
+                break;
+            case DiscoveryFindingServices:
+                callback.DiscoveryStateChanged(ConnectorLib_Callback.DiscoveryState.FindingServices);
+                break;
+            default:
+                throw new RuntimeException("Invalid value for DiscoveryCallback.State = " + newState);
+        }
     }
 }

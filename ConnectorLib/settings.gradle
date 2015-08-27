@@ -1,4 +1,4 @@
-include ':connectorlib2'
+include ':connectorlib'
 gradle.ext.version = "0.0.0";
-gradle.ext.group = "org.thaliproject.p2p.connectorlib2"
+gradle.ext.group = "org.thaliproject.p2p.connectorlib"
 

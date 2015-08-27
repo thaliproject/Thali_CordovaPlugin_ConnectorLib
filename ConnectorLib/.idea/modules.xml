@@ -3,7 +3,7 @@
   <component name="ProjectModuleManager">
     <modules>
       <module fileurl="file://$PROJECT_DIR$/ConnectorLib.iml" filepath="$PROJECT_DIR$/ConnectorLib.iml" />
-      <module fileurl="file://$PROJECT_DIR$/connectorlib2/connectorlib2.iml" filepath="$PROJECT_DIR$/connectorlib2/connectorlib2.iml" />
+      <module fileurl="file://$PROJECT_DIR$/connectorlib/connectorlib.iml" filepath="$PROJECT_DIR$/connectorlib/connectorlib.iml" />
     </modules>
   </component>
 </project>

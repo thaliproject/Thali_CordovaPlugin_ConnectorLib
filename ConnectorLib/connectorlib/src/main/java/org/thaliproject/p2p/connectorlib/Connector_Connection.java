@@ -8,97 +8,109 @@ import android.content.Context;
 import android.os.Handler;
 import android.util.Log;
 
+import java.io.IOException;
 import java.util.UUID;
 
 /**
  * Created by juksilve on 13.3.2015.
  */
-public class Connector_Connection implements BTListenerThread.BtListenCallback, BTConnectToThread.BtConnectToCallback{
+public class Connector_Connection implements ConnectionCallback{
 
-    Connector_Connection that = this;
+    private final Connector_Connection that = this;
 
-    public enum State{
-        ConnectionIdle,
-        ConnectionNotInitialized,
-        ConnectionConnecting,
-        ConnectionConnected
-    }
+    private final BluetoothAdapter mBluetoothAdapter;
+    private BTListenerThread mBTListenerThread = null;
+    private BTConnectToThread mBTConnectToThread = null;
 
-    public interface  ListenerCallback{
-        public void Connected(BluetoothSocket socket, boolean incoming, String peerId, String peerName, String peerAddress);
-        public void ConnectionFailed(String peerId, String peerName, String peerAddress);
-        public void ConnectionStateChanged(State newState);
-    }
+    private final ConnectorLib_Callback callback;
+    private final UUID BluetoothUUID;
+    private final String BluetoothName;
+    private final String mInstanceString;
+    private final Handler mHandler;
 
-    BluetoothAdapter mBluetoothAdapter= null;
-    BTListenerThread mBTListenerThread = null;
-    BTConnectToThread mBTConnectToThread = null;
+    // implementation which forwards any uncaught exception from threads to the UI app's thread
+    private final Thread.UncaughtExceptionHandler mThreadUncaughtExceptionHandler;
 
-
-    private ListenerCallback callback = null;
-    private Context context = null;
-    private UUID BluetoothUUID;
-    private String BluetootName;
-    private String mInstanceString = "";
-    private Handler mHandler = null;
-    private State myState = State.ConnectionNotInitialized;
-
-
-    public Connector_Connection(Context Context, ListenerCallback Callback, BluetoothAdapter adapter, UUID BtUuid, String btName, String instanceLine){
-        this.context = Context;
+    public Connector_Connection(Context Context, ConnectorLib_Callback Callback, BluetoothAdapter adapter, UUID BtUuid, String btName, String instanceLine){
         this.callback = Callback;
         this.mBluetoothAdapter = adapter;
         this.BluetoothUUID = BtUuid;
-        this.BluetootName = btName;
+        this.BluetoothName = btName;
         this.mInstanceString = instanceLine;
-        this.mHandler = new Handler(this.context.getMainLooper());
-        this.myState = State.ConnectionNotInitialized;
-
-    }
-
-    public synchronized void StartListening() {
-
-        if (mBTListenerThread != null) {
-            mBTListenerThread.Stop();
-            mBTListenerThread = null;
-        }
-
-        print_line("", "StartBluetooth listener");
-        mBTListenerThread = new BTListenerThread(that, mBluetoothAdapter,BluetoothUUID,BluetootName,mInstanceString);
-        mBTListenerThread.start();
-    }
-
-    public synchronized boolean TryConnect(BluetoothDevice device,UUID BtUUID, String peerId,String peerName, String peerAddress) {
-
-        boolean ret = false;
-        if (device != null) {
-
-            ret = true;
-            BTConnectToThread tmp = mBTConnectToThread;
-            mBTConnectToThread = null;
-            if (tmp != null) {
-                tmp.Stop();
+        this.mHandler = new Handler(Context.getMainLooper());
+        this.mThreadUncaughtExceptionHandler = new Thread.UncaughtExceptionHandler() {
+            @Override
+            public void uncaughtException(Thread thread, Throwable ex) {
+                final Throwable tmpException = ex;
+                mHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        throw new RuntimeException(tmpException);
+                    }
+                });
             }
+        };
 
-            print_line("", "Selected device address: " + device.getAddress() +  ", name: " + device.getName());
+        setState(ConnectorLib_Callback.ConnectionState.Idle);
+    }
 
-            tmp = new BTConnectToThread(that, device,BtUUID,peerId,peerName,peerAddress,mInstanceString);
-            tmp.start();
-            mBTConnectToThread = tmp;
+    public void StartListening() {
 
-            setState(State.ConnectionConnecting);
-            print_line("", "Connecting to " + device.getName() + ", at " + device.getAddress());
-        } else {
-            // we'll get discovery stopped event soon enough
-            // and it starts the discovery again, so no worries :)
-            print_line("", "No devices selected");
+        BTListenerThread tmpList = mBTListenerThread;
+        mBTListenerThread = null;
+        if (tmpList != null) {
+            tmpList.Stop();
         }
 
-        return ret;
+        Log.i("", "StartBluetooth listener");
+        try {
+            tmpList = new BTListenerThread(that, mBluetoothAdapter, BluetoothUUID, BluetoothName);
+        }catch (IOException e){
+            e.printStackTrace();
+            // in this point of time we can not accept any incoming connections, thus what should we do ?
+            return;
+        }
+        tmpList.setDefaultUncaughtExceptionHandler(mThreadUncaughtExceptionHandler);
+        setState(ConnectorLib_Callback.ConnectionState.Listening);
+        tmpList.start();
+        mBTListenerThread = tmpList;
+    }
+
+    public boolean TryConnect(BluetoothDevice device,UUID BtUUID, String peerId,String peerName, String peerAddress) {
+
+        if (device == null) {
+            Log.i("", "No devices selected");
+            return false;
+        }
+
+        BTConnectToThread tmp = mBTConnectToThread;
+        mBTConnectToThread = null;
+        if (tmp != null) {
+            tmp.Stop();
+        }
+
+        Log.i("", "Selected device address: " + device.getAddress() + ", name: " + device.getName());
+
+        try {
+            tmp = new BTConnectToThread(that, device, BtUUID, peerId, peerName, peerAddress, mInstanceString);
+        }catch (IOException e){
+            e.printStackTrace();
+            //lets inform that outgoing connection just failed.
+            ConnectionFailed(e.toString(),peerId,peerName,peerAddress);
+            return false;
+        }
+        tmp.setDefaultUncaughtExceptionHandler(mThreadUncaughtExceptionHandler);
+        tmp.start();
+        mBTConnectToThread = tmp;
+
+        setState(ConnectorLib_Callback.ConnectionState.Connecting);
+        Log.i("", "Connecting to " + device.getName() + ", at " + device.getAddress());
+
+        return true;
     }
 
     public void Stop() {
-        print_line("", "Stop Bluetooth");
+        Log.i("", "Stop Bluetooth");
 
         BTListenerThread tmpList = mBTListenerThread;
         mBTListenerThread = null;
@@ -118,7 +130,7 @@ public class Connector_Connection implements BTListenerThread.BtListenCallback, 
         mBTConnectToThread = null;
         final BluetoothSocket tmp = socket;
 
-        print_line("HS", "HandShaked outgoing for : " + peerName);
+        Log.i("HS", "Hand Shake finished outgoing for : " + peerName);
 
         final String peerIdTmp = peerId;
         final String peerNaTmp = peerName;
@@ -128,7 +140,7 @@ public class Connector_Connection implements BTListenerThread.BtListenCallback, 
             @Override
             public void run() {
                 if (tmp.isConnected()) {
-                    setState(State.ConnectionConnected);
+                    setState(ConnectorLib_Callback.ConnectionState.Connected);
                     that.callback.Connected(tmp, false,peerIdTmp,peerNaTmp,peerAdTmp);
                 } else {
                     ConnectionFailed("Disconnected",peerIdTmp,peerNaTmp,peerAdTmp);
@@ -140,7 +152,7 @@ public class Connector_Connection implements BTListenerThread.BtListenCallback, 
     @Override
     public void GotConnection(BluetoothSocket socket,String peerId,String peerName,String peerAddress) {
         final BluetoothSocket tmp = socket;
-        print_line("HS", "Incoming connection HandShaked for : " + peerName);
+        Log.i("HS", "Incoming connection Hand Shake finished for : " + peerName);
 
         final String peerIdTmp = peerId;
         final String peerNaTmp = peerName;
@@ -152,7 +164,7 @@ public class Connector_Connection implements BTListenerThread.BtListenCallback, 
             @Override
             public void run() {
                 if (tmp.isConnected()) {
-                    setState(State.ConnectionConnected);
+                    setState(ConnectorLib_Callback.ConnectionState.Connected);
                     that.callback.Connected(tmp, true,peerIdTmp,peerNaTmp,peerAdTmp);
                 } else {
                     ListeningFailed("Disconnected");
@@ -171,11 +183,11 @@ public class Connector_Connection implements BTListenerThread.BtListenCallback, 
         mHandler.post(new Runnable() {
             @Override
             public void run() {
-                print_line("CONNEC", "Error: " + tmp);
+                Log.i("CONNEC", "Error: " + tmp);
 
                 that.callback.ConnectionFailed(peerIdTmp,peerNaTmp,peerAdTmp);
 
-                //only care if we have not stoppeed & nulled the instance
+                //only care if we have not stopped & nulled the instance
                 BTConnectToThread tmp = mBTConnectToThread;
                 mBTConnectToThread = null;
                 if (tmp != null) {
@@ -187,28 +199,24 @@ public class Connector_Connection implements BTListenerThread.BtListenCallback, 
 
     @Override
     public void ListeningFailed(String reason) {
+        setState(ConnectorLib_Callback.ConnectionState.Idle);
         final String tmp = reason;
         mHandler.post(new Runnable() {
             @Override
             public void run() {
-                print_line("LISTEN", "Error: " + tmp);
+                Log.i("LISTEN", "Error: " + tmp);
                 StartListening();
             }
         });
     }
 
-    private void setState(State newState) {
-        final State tmpState = newState;
-        myState = tmpState;
+    private void setState(ConnectorLib_Callback.ConnectionState newState) {
+        final ConnectorLib_Callback.ConnectionState tmpState = newState;
         mHandler.post(new Runnable() {
             @Override
             public void run() {
                 that.callback.ConnectionStateChanged(tmpState);
             }
         });
-    }
-
-    public void print_line(String who, String line) {
-        Log.i("BTConnector_BtConnection" + who, line);
     }
 }
